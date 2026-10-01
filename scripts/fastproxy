@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# The operator menu is independent of the web backend implementation.
+set -uo pipefail
+
+CONFIG=${FASTPROXY_CONFIG:-/etc/fastproxy/fastproxy.env}
+SOCKET=${FASTPROXY_SOCKET:-/run/fastproxy/control.sock}
+SERVICE=fastproxy
+
+require_root() {
+  if [[ ${EUID} -ne 0 ]]; then
+    echo '请使用 sudo fastproxy。'
+    exit 1
+  fi
+}
+
+api() {
+  local method=$1 path=$2 body=${3:-} response code
+  if [[ ! -S "$SOCKET" ]]; then
+    echo '服务未运行，请先启动服务。' >&2
+    return 1
+  fi
+  response=$(mktemp)
+  if [[ "$method" == GET ]]; then
+    code=$(curl -sS --max-time 25 --unix-socket "$SOCKET" -o "$response" -w '%{http_code}' "http://localhost$path") || { rm -f "$response"; return 1; }
+  else
+    code=$(curl -sS --max-time 25 --unix-socket "$SOCKET" -o "$response" -w '%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$body" "http://localhost$path") || { rm -f "$response"; return 1; }
+  fi
+  if [[ "$code" != 2* ]]; then
+    jq -r '.error // "操作失败"' "$response" >&2
+    rm -f "$response"
+    return 1
+  fi
+  cat "$response"
+  rm -f "$response"
+}
+
+status() {
+  echo "systemd: $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
+  if [[ -S "$SOCKET" ]]; then
+    api GET /api/status | jq -r '"引擎: \(.runtime.mode)  内核状态: \(if .runtime.healthy then "正常" else "异常" end)\n转发: \(if .state.forwarding then "开启" else "暂停" end)  规则数: \(.state.rules | length)  版本: r\(.state.revision)\n运行时长: \(.uptime_seconds) 秒\n\(.runtime.error // "")"'
+  fi
+}
+
+list_rules() {
+  local state
+  state=$(api GET /api/status) || return
+  jq -r '.state.rules | to_entries[] | "\(.key + 1). [\(if .value.enabled then "开" else "关" end)] \(.value.name) | \(.value.protocol) | \(.value.listen_ip):\(.value.listen_port) → \(.value.target_ip):\(.value.target_port)"' <<< "$state"
+  if [[ $(jq '.state.rules | length' <<< "$state") == 0 ]]; then echo '暂无规则。'; fi
+}
+
+prompt() {
+  local label=$1 default=$2 value
+  read -r -p "$label [$default]: " value || return 1
+  printf '%s' "${value:-$default}"
+}
+
+edit_rule() {
+  local mode=$1 state index existing='{}' id='' name protocol listen_ip listen_port target_ip target_port enabled body revision
+  state=$(api GET /api/status) || return
+  revision=$(jq '.state.revision' <<< "$state")
+  if [[ "$mode" == edit ]]; then
+    list_rules
+    read -r -p '输入要修改的规则编号: ' index || return
+    [[ "$index" =~ ^[1-9][0-9]{0,2}$ ]] || { echo '编号无效'; return; }
+    existing=$(jq -c --argjson i "$((index - 1))" '.state.rules[$i] // empty' <<< "$state")
+    [[ -n "$existing" ]] || { echo '规则不存在'; return; }
+    id=$(jq -r '.id' <<< "$existing")
+  fi
+  name=$(prompt '规则名称' "$(jq -r '.name // "我的转发"' <<< "$existing")") || return
+  protocol=$(prompt '协议 tcp / udp / both' "$(jq -r '.protocol // "tcp"' <<< "$existing")") || return
+  listen_ip=$(prompt '监听 IPv4（0.0.0.0 表示全部本机地址）' "$(jq -r '.listen_ip // "0.0.0.0"' <<< "$existing")") || return
+  listen_port=$(prompt '本机监听端口' "$(jq -r '.listen_port // 8000' <<< "$existing")") || return
+  target_ip=$(prompt '目标服务器 IPv4' "$(jq -r '.target_ip // ""' <<< "$existing")") || return
+  target_port=$(prompt '目标端口' "$(jq -r '.target_port // 9000' <<< "$existing")") || return
+  enabled=$(jq 'if has("enabled") then .enabled else true end' <<< "$existing")
+  [[ "$listen_port" =~ ^[0-9]{1,5}$ && "$target_port" =~ ^[0-9]{1,5}$ ]] || { echo '端口必须是数字'; return; }
+  body=$(jq -nc --arg name "$name" --arg p "$protocol" --arg l "$listen_ip" --arg t "$target_ip" --arg id "$id" --argjson lp "$((10#$listen_port))" --argjson tp "$((10#$target_port))" --argjson enabled "$enabled" --argjson revision "$revision" '{revision:$revision,rule:{id:$id,name:$name,protocol:$p,listen_ip:$l,listen_port:$lp,target_ip:$t,target_port:$tp,enabled:$enabled}}')
+  if [[ "$mode" == edit ]]; then
+    api PUT "/api/rules/$id" "$body" >/dev/null && echo '规则已修改并生效。'
+  else
+    api POST /api/rules "$body" >/dev/null && echo '规则已添加并生效。'
+  fi
+}
+
+choose_rule() {
+  local action=$1 state index rule id revision body confirm
+  state=$(api GET /api/status) || return
+  list_rules
+  read -r -p '输入规则编号: ' index || return
+  [[ "$index" =~ ^[1-9][0-9]{0,2}$ ]] || { echo '编号无效'; return; }
+  rule=$(jq -c --argjson i "$((index - 1))" '.state.rules[$i] // empty' <<< "$state")
+  [[ -n "$rule" ]] || { echo '规则不存在'; return; }
+  id=$(jq -r '.id' <<< "$rule")
+  revision=$(jq '.state.revision' <<< "$state")
+  if [[ "$action" == delete ]]; then
+    read -r -p "删除 $(jq -r '.name' <<< "$rule")？输入 yes 确认: " confirm || return
+    [[ "$confirm" == yes ]] || return
+    body=$(jq -nc --argjson revision "$revision" '{revision:$revision}')
+    api DELETE "/api/rules/$id" "$body" >/dev/null && echo '已删除。'
+  else
+    body=$(jq -nc --argjson revision "$revision" --argjson rule "$rule" '{revision:$revision,rule:($rule | .enabled = (.enabled | not))}')
+    api PUT "/api/rules/$id" "$body" >/dev/null && echo '规则状态已更新。'
+  fi
+}
+
+set_env() {
+  local key=$1 value=$2 tmp escaped
+  [[ -f "$CONFIG" ]] || { echo "配置文件不存在：$CONFIG"; return 1; }
+  tmp=$(mktemp "$(dirname "$CONFIG")/.fastproxy-env.XXXXXX") || return
+  chmod 600 "$tmp"
+  # EnvironmentFile supports double quoted values; do not source it as shell code.
+  escaped=${value//\\/\\\\}
+  escaped=${escaped//\"/\\\"}
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == "$key="* ]] || printf '%s\n' "$line" >> "$tmp"
+  done < "$CONFIG"
+  printf '%s="%s"\n' "$key" "$escaped" >> "$tmp"
+  mv -f "$tmp" "$CONFIG"
+}
+
+change_listen() {
+  local value
+  read -r -p '管理后台监听地址（例如 127.0.0.1:8080 或 0.0.0.0:8080）: ' value || return
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]] || { echo '地址格式无效'; return; }
+  local octet
+  IFS=. read -r -a octets <<< "${value%:*}"
+  for octet in "${octets[@]}"; do [[ $((10#$octet)) -le 255 ]] || { echo 'IPv4 地址无效'; return; }; done
+  # Ask the service to check for port collisions before editing its config.
+  local state port
+  port=${value##*:}
+  [[ $((10#$port)) -ge 1 && $((10#$port)) -le 65535 ]] || { echo '端口范围为 1–65535'; return; }
+  state=$(api GET /api/status) || return
+  if jq -e --argjson port "$((10#$port))" '.protected_ports[:-1] | any(. == $port)' >/dev/null <<< "$state"; then
+    echo '此端口受到保护，请选择其他管理端口。'; return
+  fi
+  if jq -e --argjson port "$((10#$port))" '.state.rules | any(.listen_port == $port)' >/dev/null <<< "$state"; then
+    echo '此端口已有转发规则，请先修改该规则。'; return
+  fi
+  update_and_restart FASTPROXY_LISTEN "$value" && echo '管理地址已更新。'
+}
+
+change_password() {
+  local password again
+  read -r -s -p '新管理密码（至少 12 个字符）: ' password || return
+  echo
+  read -r -s -p '再次输入: ' again || return
+  echo
+  [[ "$password" == "$again" && ${#password} -ge 12 ]] || { echo '两次输入不同，或密码不足 12 个字符。'; return; }
+  update_and_restart FASTPROXY_ADMIN_PASSWORD "$password" && echo '密码已更新，原网页登录已失效。'
+}
+
+update_and_restart() {
+  local backup ready=false i
+  backup=$(mktemp "$(dirname "$CONFIG")/.fastproxy-backup.XXXXXX") || return 1
+  chmod 600 "$backup"
+  cp "$CONFIG" "$backup"
+  if set_env "$1" "$2" && systemctl restart "$SERVICE"; then
+    for ((i=0; i<10; i++)); do
+      if curl -fsS --max-time 2 --unix-socket "$SOCKET" http://localhost/healthz >/dev/null 2>&1; then ready=true; break; fi
+      sleep 1
+    done
+  fi
+  if [[ "$ready" == true ]]; then rm -f "$backup"; return 0; fi
+  mv -f "$backup" "$CONFIG"
+  systemctl restart "$SERVICE"
+  echo '服务启动失败，已恢复原配置。执行 sudo fastproxy logs 查看原因。' >&2
+  return 1
+}
+
+toggle_forwarding() {
+  local state body
+  state=$(api GET /api/status) || return
+  body=$(jq -c '{revision:.state.revision,forwarding:(.state.forwarding | not)}' <<< "$state")
+  api POST /api/forwarding "$body" >/dev/null && echo '全局转发状态已更新。'
+}
+
+main() {
+  require_root
+  for dependency in curl jq systemctl; do
+    command -v "$dependency" >/dev/null || { echo "缺少 $dependency，请重新运行安装脚本。"; exit 1; }
+  done
+  case "${1:-menu}" in
+    status) status; return ;;
+    list) list_rules; return ;;
+    start|stop|restart) systemctl "$1" "$SERVICE"; return ;;
+    logs) journalctl -u "$SERVICE" -n 100 --no-pager; return ;;
+    menu) ;;
+    *) echo '用法：fastproxy [menu|status|list|start|stop|restart|logs]'; exit 1 ;;
+  esac
+  [[ -t 0 ]] || { echo '数字菜单需要交互终端。'; exit 1; }
+  local choice
+  while true; do
+    cat <<'MENU'
+
+  FastProxy · 服务器端口转发
+  ──────────────────────────────
+   1  查看服务器 / 转发状态
+   2  查看转发规则
+   3  添加转发规则
+   4  修改转发规则 / 端口
+   5  启用 / 停用单条规则
+   6  删除规则
+   7  修改管理后台地址 / 端口
+   8  修改管理密码
+   9  重启服务
+  10  停止服务
+  11  启动服务
+  12  查看服务日志
+  13  暂停 / 恢复全部转发
+  14  重新应用已保存规则
+   0  退出
+MENU
+    read -r -p '输入数字: ' choice || break
+    case "$choice" in
+      1) status ;; 2) list_rules ;; 3) edit_rule add ;; 4) edit_rule edit ;;
+      5) choose_rule toggle ;; 6) choose_rule delete ;; 7) change_listen ;;
+      8) change_password ;; 9) systemctl restart "$SERVICE" ;;
+      10) systemctl stop "$SERVICE" ;; 11) systemctl start "$SERVICE" ;;
+      12) journalctl -u "$SERVICE" -n 60 --no-pager ;;
+      13) toggle_forwarding ;;
+      14) api POST /api/reapply '{}' >/dev/null && echo '已重新应用。' ;;
+      0) break ;; *) echo '请输入菜单中的数字。' ;;
+    esac
+  done
+}
+
+main "$@"

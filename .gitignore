@@ -1,0 +1,9 @@
+node_modules/
+data/
+dist/
+dist-test/
+apps/server/public/
+.env
+*.log
+coverage/
+.release/

@@ -1,0 +1,22 @@
+{
+  "name": "fastproxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Manage Linux nftables TCP/UDP port forwarding from a web panel and terminal menu",
+  "engines": { "node": ">=22.12.0" },
+  "workspaces": ["apps/server", "apps/web"],
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"npm run dev -w apps/server\" \"npm run dev -w apps/web\"",
+    "build": "npm run build -w apps/web && npm run build -w apps/server",
+    "typecheck": "npm run typecheck -w apps/server && npm run typecheck -w apps/web",
+    "test": "npm run build:test -w apps/server && node --test apps/server/dist-test/test/*.test.js",
+    "start": "npm run start -w apps/server",
+    "release": "bash scripts/package.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

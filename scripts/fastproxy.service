@@ -1,0 +1,38 @@
+[Unit]
+Description=FastProxy nftables forwarding manager
+After=network-online.target nftables.service ufw.service firewalld.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/fastproxy/fastproxy.env
+ExecStart=/opt/fastproxy/start
+WorkingDirectory=/opt/fastproxy
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+UMask=0077
+RuntimeDirectory=fastproxy
+RuntimeDirectoryMode=0700
+StateDirectory=fastproxy
+StateDirectoryMode=0700
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/fastproxy /run/fastproxy
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

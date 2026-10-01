@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/fastproxy
+if [[ -x /opt/fastproxy/runtime/bin/node ]]; then
+  exec /opt/fastproxy/runtime/bin/node apps/server/dist/main.js
+fi
+exec /usr/bin/node apps/server/dist/main.js
