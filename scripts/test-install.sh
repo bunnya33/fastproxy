@@ -25,10 +25,7 @@ if [[ ${1:-} == --namespace ]]; then
   export FASTPROXY_ADMIN_PASSWORD=installer-regression-password
   unset FASTPROXY_REPO FASTPROXY_NODE_VERSION FASTPROXY_LISTEN FASTPROXY_ADMIN_USER SSH_CONNECTION
   touch "$CASE_DIR/requests.log" "$CASE_DIR/services.log" "$CASE_DIR/git.log" "$CASE_DIR/npm.log"
-  cleanup() {
-    if [[ -f "$CASE_DIR/active" ]]; then systemctl stop fastproxy >/dev/null 2>&1 || true; fi
-  }
-  trap cleanup EXIT
+  trap 'if [[ -f "$CASE_DIR/active" ]]; then systemctl stop fastproxy >/dev/null 2>&1 || true; fi' EXIT
   if [[ "$REAL_INSTALL" == true ]]; then ip link set lo up; fi
   INSTALL_ARGS=()
   case "$SCENARIO" in
