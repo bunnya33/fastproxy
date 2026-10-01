@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO=${FASTPROXY_REPO:-bunnya33/fastproxy}
-VERSION=latest
+RELEASE_VERSION=latest
 PACKAGE=''
 LISTEN=${FASTPROXY_LISTEN:-127.0.0.1:8080}
 ADMIN_USER=${FASTPROXY_ADMIN_USER:-admin}
@@ -15,8 +15,8 @@ CHECK_ONLY=false
 usage() {
   cat <<'HELP'
 FastProxy 安装 / 更新（Debian 12+、Ubuntu 20.04+，systemd）
-  bash install.sh --repo OWNER/REPO [--version v0.1.1]
-  bash install.sh --package /path/fastproxy-v0.1.1.tar.gz
+  bash install.sh --repo OWNER/REPO [--version v0.1.2]
+  bash install.sh --package /path/fastproxy-v0.1.2.tar.gz
 选项：
   --listen 127.0.0.1:8080   管理后台监听地址（首次安装）
   --user admin             管理用户名（首次安装）
@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo|--version|--package|--listen|--user)
       [[ $# -ge 2 ]] || die "$1 缺少参数"
-      case "$1" in --repo) REPO=$2 ;; --version) VERSION=$2 ;; --package) PACKAGE=$2 ;; --listen) LISTEN=$2 ;; --user) ADMIN_USER=$2 ;; esac
+      case "$1" in --repo) REPO=$2 ;; --version) RELEASE_VERSION=$2 ;; --package) PACKAGE=$2 ;; --listen) LISTEN=$2 ;; --user) ADMIN_USER=$2 ;; esac
       shift 2 ;;
     --check) CHECK_ONLY=true; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -42,6 +42,8 @@ done
 [[ -d /run/systemd/system ]] || die '需要正在运行的 systemd'
 # shellcheck source=/dev/null
 source /etc/os-release
+# os-release defines VERSION for the operating system; keep the application
+# release in RELEASE_VERSION so both the default and --version survive sourcing.
 [[ ${ID:-} == ubuntu || ${ID:-} == debian ]] || die '首版安装器支持 Debian / Ubuntu'
 OS_MAJOR=${VERSION_ID:-0}
 OS_MAJOR=${OS_MAJOR%%.*}
@@ -52,16 +54,16 @@ case $(uname -m) in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die '仅
 [[ "$LISTEN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]] || die '监听地址格式应为 IPv4:端口'
 PORT=${LISTEN##*:}
 [[ $((10#$PORT)) -ge 1 && $((10#$PORT)) -le 65535 ]] || die '管理端口应为 1–65535'
-if [[ "$CHECK_ONLY" == true ]]; then
-  echo "环境检查通过：${PRETTY_NAME:-Linux}，$ARCH，systemd；安装位置 $INSTALL_ROOT"
-  exit 0
-fi
 if [[ -z "$PACKAGE" ]]; then
   [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die '请指定 --repo OWNER/REPO，或 --package 本地发布包'
-  [[ "$VERSION" == latest || "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.0 或 latest'
+  [[ "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.2 或 latest'
 else
   [[ -f "$PACKAGE" ]] || die '本地发布包不存在'
   PACKAGE=$(realpath "$PACKAGE")
+fi
+if [[ "$CHECK_ONLY" == true ]]; then
+  echo "环境检查通过：${PRETTY_NAME:-Linux}，$ARCH，systemd；安装位置 $INSTALL_ROOT"
+  exit 0
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -70,12 +72,12 @@ apt-get install -y -qq ca-certificates curl jq nftables iproute2 xz-utils openss
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 if [[ -z "$PACKAGE" ]]; then
-  if [[ "$VERSION" == latest ]]; then
-    VERSION=$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name')
-    [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '未找到正式发布版本，请先创建 GitHub Release'
+  if [[ "$RELEASE_VERSION" == latest ]]; then
+    RELEASE_VERSION=$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name')
+    [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '未找到正式发布版本，请先创建 GitHub Release'
   fi
-  FILE="fastproxy-$VERSION.tar.gz"
-  BASE="https://github.com/$REPO/releases/download/$VERSION"
+  FILE="fastproxy-$RELEASE_VERSION.tar.gz"
+  BASE="https://github.com/$REPO/releases/download/$RELEASE_VERSION"
   curl -fsSL --proto '=https' --tlsv1.2 "$BASE/$FILE" -o "$TMP/$FILE"
   curl -fsSL --proto '=https' --tlsv1.2 "$BASE/SHA256SUMS" -o "$TMP/SHA256SUMS"
   (cd "$TMP" && awk -v file="$FILE" '$2 == file || $2 == "*" file {print}' SHA256SUMS > selected.sha256 && [[ -s selected.sha256 ]] && sha256sum -c selected.sha256) || die '发布包校验失败'

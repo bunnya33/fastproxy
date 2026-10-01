@@ -49,10 +49,10 @@ npm ci
 bash scripts/package.sh
 ```
 
-将 `dist/fastproxy-v0.1.1.tar.gz` 和 `scripts/install.sh` 上传到服务器，然后执行：
+将 `dist/fastproxy-v0.1.2.tar.gz` 和 `scripts/install.sh` 上传到服务器，然后执行：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.1.tar.gz
+sudo bash install.sh --package ./fastproxy-v0.1.2.tar.gz
 sudo fastproxy
 ```
 
@@ -65,7 +65,7 @@ ssh -N -L 8080:127.0.0.1:8080 用户@服务器
 随后在电脑浏览器打开 `http://127.0.0.1:8080`。如需直接监听公网：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.1.tar.gz --listen 0.0.0.0:8080
+sudo bash install.sh --package ./fastproxy-v0.1.2.tar.gz --listen 0.0.0.0:8080
 ```
 
 公网管理后台请配置 HTTPS 反向代理或限制管理端口来源。安装器不会自动开放云安全组或修改 UFW / firewalld 的转发策略。
@@ -79,7 +79,9 @@ curl -fsSL https://raw.githubusercontent.com/bunnya33/fastproxy/main/scripts/ins
   | sudo bash
 ```
 
-也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.1`。重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。
+也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.2`。重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。
+
+如果旧安装器报“版本格式应为 v0.1.0 或 latest”，是系统信息覆盖发布版本的脚本问题，已在 v0.1.2 修复，Ubuntu 20.04 无需升级系统。在源码目录执行 `git pull --ff-only` 后重新运行 `sudo bash scripts/install.sh`，或使用上方命令获取最新安装器。
 
 ## 数字菜单
 
@@ -159,3 +161,5 @@ sudo unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 \
 真实测试在独立网络命名空间内建立请求端、转发端和目标端，验证 TCP / UDP 原始数据及回包、SNAT、端口修改、停用 / 恢复、规则事务失败和已有防火墙保留。不会改变主机网络规则。
 
 如需验证真实 systemd 单元的权限限制、启动、重启恢复和停止清理，在已构建的 Linux 项目目录运行 `sudo bash scripts/test-systemd.sh`。脚本使用独立网络命名空间和临时单元，结束后清理，不安装正式服务。
+
+安装器回归测试：`sudo bash scripts/test-install.sh`。使用 Ubuntu 20.04 / Debian 12 系统信息和离线下载、服务替身，执行真实安装脚本的默认与指定版本安装、更新、参数校验和校验失败路径。挂载与网络命名空间隔离生产目录和主机网络；测试不实际安装依赖或启动服务。CI 同时在 Ubuntu 20.04 用户环境中执行此测试。

@@ -15,8 +15,9 @@ jobs:
       - run: npm run typecheck && npm run build && npm test
       - run: npm audit --omit=dev
       - run: sudo apt-get update && sudo apt-get install -y nftables iproute2 jq shellcheck
-      - run: bash -n scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start
-      - run: shellcheck scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start scripts/test-systemd.sh
+      - run: bash -n scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start scripts/test-install.sh
+      - run: shellcheck scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start scripts/test-systemd.sh scripts/test-install.sh
+      - run: sudo bash scripts/test-install.sh
       - run: sudo unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 "$(command -v node)" --test apps/server/dist-test/test/network.test.js
   ubuntu20:
     name: Ubuntu 20.04 compatibility
@@ -27,13 +28,14 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - run: apt-get update -qq && apt-get install -y -qq ca-certificates curl git libstdc++6 nftables iproute2 systemd
+      - run: apt-get update -qq && apt-get install -y -qq ca-certificates curl git jq libstdc++6 nftables iproute2 systemd
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
       - run: node --version && nft --version && ldd --version
       - run: npm ci && npm test
+      - run: bash scripts/test-install.sh
       - run: unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 "$(command -v node)" --test apps/server/dist-test/test/network.test.js
       - name: Check systemd 245 unit compatibility
         run: |
