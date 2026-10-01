@@ -18,3 +18,26 @@ jobs:
       - run: bash -n scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start
       - run: shellcheck scripts/install.sh scripts/fastproxy scripts/package.sh scripts/start scripts/test-systemd.sh
       - run: sudo unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 "$(command -v node)" --test apps/server/dist-test/test/network.test.js
+  ubuntu20:
+    name: Ubuntu 20.04 compatibility
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+      options: --privileged
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - run: apt-get update -qq && apt-get install -y -qq ca-certificates curl git libstdc++6 nftables iproute2 systemd
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --version && nft --version && ldd --version
+      - run: npm ci && npm test
+      - run: unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 "$(command -v node)" --test apps/server/dist-test/test/network.test.js
+      - name: Check systemd 245 unit compatibility
+        run: |
+          mkdir -p /opt/fastproxy /etc/fastproxy /var/lib/fastproxy /run/fastproxy
+          touch /etc/fastproxy/fastproxy.env
+          sed 's|ExecStart=.*|ExecStart=/bin/true|' scripts/fastproxy.service > /run/fastproxy-compat.service
+          systemd-analyze verify /run/fastproxy-compat.service

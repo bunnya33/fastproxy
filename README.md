@@ -38,7 +38,7 @@ npm run build
 
 ## 服务器安装
 
-首版安装器支持 **Debian 12+ / Ubuntu 22.04+、amd64 / arm64、正在运行的 systemd**。需要 root、nftables、支持 NAT / conntrack 的 Linux 内核和服务器出网能力。安装器不会修改服务器原有 Node.js，而是安装校验过的私有 Node.js 24 运行时。
+安装器支持 **Debian 12+ / Ubuntu 20.04+、amd64 / arm64、正在运行的 systemd**。需要 root、nftables、支持 NAT / conntrack 的 Linux 内核和服务器出网能力。安装器不会修改服务器原有 Node.js，而是安装校验过的私有 Node.js 24 运行时。Ubuntu 20.04 使用系统自带的 nftables 即可，无需升级系统或安装 Docker。
 
 ### 使用本地发布包
 
@@ -49,10 +49,10 @@ npm ci
 bash scripts/package.sh
 ```
 
-将 `dist/fastproxy-v0.1.0.tar.gz` 和 `scripts/install.sh` 上传到服务器，然后执行：
+将 `dist/fastproxy-v0.1.1.tar.gz` 和 `scripts/install.sh` 上传到服务器，然后执行：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.0.tar.gz
+sudo bash install.sh --package ./fastproxy-v0.1.1.tar.gz
 sudo fastproxy
 ```
 
@@ -65,7 +65,7 @@ ssh -N -L 8080:127.0.0.1:8080 用户@服务器
 随后在电脑浏览器打开 `http://127.0.0.1:8080`。如需直接监听公网：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.0.tar.gz --listen 0.0.0.0:8080
+sudo bash install.sh --package ./fastproxy-v0.1.1.tar.gz --listen 0.0.0.0:8080
 ```
 
 公网管理后台请配置 HTTPS 反向代理或限制管理端口来源。安装器不会自动开放云安全组或修改 UFW / firewalld 的转发策略。
@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/bunnya33/fastproxy/main/scripts/ins
   | sudo bash
 ```
 
-也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.0`。重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。首次发布完成之前可以使用上一节的本地发布包安装。
+也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.1`。重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。
 
 ## 数字菜单
 

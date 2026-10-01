@@ -14,9 +14,9 @@ CHECK_ONLY=false
 
 usage() {
   cat <<'HELP'
-FastProxy 安装 / 更新（Debian 12+、Ubuntu 22.04+，systemd）
-  bash install.sh --repo OWNER/REPO [--version v0.1.0]
-  bash install.sh --package /path/fastproxy-v0.1.0.tar.gz
+FastProxy 安装 / 更新（Debian 12+、Ubuntu 20.04+，systemd）
+  bash install.sh --repo OWNER/REPO [--version v0.1.1]
+  bash install.sh --package /path/fastproxy-v0.1.1.tar.gz
 选项：
   --listen 127.0.0.1:8080   管理后台监听地址（首次安装）
   --user admin             管理用户名（首次安装）
@@ -47,7 +47,7 @@ OS_MAJOR=${VERSION_ID:-0}
 OS_MAJOR=${OS_MAJOR%%.*}
 [[ "$OS_MAJOR" =~ ^[0-9]+$ ]] || die '无法识别系统版本'
 if [[ "$ID" == debian ]]; then [[ "$OS_MAJOR" -ge 12 ]] || die '需要 Debian 12 或更高版本'; fi
-if [[ "$ID" == ubuntu ]]; then [[ "$OS_MAJOR" -ge 22 ]] || die '需要 Ubuntu 22.04 或更高版本'; fi
+if [[ "$ID" == ubuntu ]]; then [[ "$OS_MAJOR" -ge 20 ]] || die '需要 Ubuntu 20.04 或更高版本'; fi
 case $(uname -m) in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die '仅支持 amd64 / arm64' ;; esac
 [[ "$LISTEN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]] || die '监听地址格式应为 IPv4:端口'
 PORT=${LISTEN##*:}
@@ -66,7 +66,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl jq nftables iproute2 xz-utils openssl
+apt-get install -y -qq ca-certificates curl jq nftables iproute2 xz-utils openssl libstdc++6
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 if [[ -z "$PACKAGE" ]]; then
