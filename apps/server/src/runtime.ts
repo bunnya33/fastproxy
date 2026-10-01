@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface Counter { packets: number; bytes: number }
 export interface RuntimeStatus {
@@ -57,13 +59,24 @@ export function parseCounters(json: string): Record<string, Counter> {
   return counters;
 }
 
+export async function nftBatch(binary: string, config: string, checkFirst = true): Promise<void> {
+  // nft 1.0.9+ can reject piped /dev/stdin as "Not a regular file".
+  // Keep a single private regular file for both validation and application.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fastproxy-nft-'));
+  try {
+    const filename = path.join(dir, 'batch.nft');
+    await fs.writeFile(filename, config, { mode: 0o600 });
+    if (checkFirst) await runCommand(binary, ['-c', '-f', filename]);
+    await runCommand(binary, ['-f', filename]);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+}
+
 export class NFTRuntime implements Runtime {
   constructor(private binary: string) {}
   async apply(config: string): Promise<void> {
     const forward = await fs.readFile('/proc/sys/net/ipv4/ip_forward', 'utf8');
     if (forward.trim() !== '1') throw new Error('IPv4 转发未开启，请执行 sysctl -w net.ipv4.ip_forward=1');
-    await runCommand(this.binary, ['-c', '-f', '-'], config);
-    await runCommand(this.binary, ['-f', '-'], config);
+    await nftBatch(this.binary, config);
   }
   async status(): Promise<RuntimeStatus> {
     const status: RuntimeStatus = { mode: 'nftables', healthy: false, ip_forward: false, counters: {} };
@@ -75,7 +88,7 @@ export class NFTRuntime implements Runtime {
     } catch (error) { status.error = (error as Error).message; }
     return status;
   }
-  async clear(): Promise<void> { await runCommand(this.binary, ['-f', '-'], 'add table ip fastproxy\ndelete table ip fastproxy\n'); }
+  async clear(): Promise<void> { await nftBatch(this.binary, 'add table ip fastproxy\ndelete table ip fastproxy\n', false); }
 }
 
 export class DemoRuntime implements Runtime {

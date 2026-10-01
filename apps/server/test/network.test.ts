@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initialState, renderNFT } from '../src/model.js';
-import { NFTRuntime, runCommand } from '../src/runtime.js';
+import { NFTRuntime, nftBatch, runCommand } from '../src/runtime.js';
 import { rule } from './fixtures.js';
 import { Store } from '../src/store.js';
 import { Service } from '../src/service.js';
@@ -49,7 +49,7 @@ test('real nftables: TCP/UDP payloads and replies, SNAT, edits, disable, atomic 
   await nsip(client.pid, 'route', 'add', 'default', 'via', '10.250.1.1');
   await fs.writeFile('/proc/sys/net/ipv4/ip_forward', '1');
   const nft = '/usr/sbin/nft';
-  await runCommand(nft, ['-f', '-'], 'table ip unrelated {\n  chain sentinel {\n  }\n}\n');
+  await nftBatch(nft, 'table ip unrelated {\n  chain sentinel {\n  }\n}\n');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fp-network-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const runtime = new NFTRuntime(nft), store = new Store(dir);
   const service = await Service.create(store, runtime, [22, 8080]);
