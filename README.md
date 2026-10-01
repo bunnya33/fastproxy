@@ -40,21 +40,27 @@ npm run build
 
 安装器支持 **Debian 12+ / Ubuntu 20.04+、amd64 / arm64、正在运行的 systemd**。需要 root、nftables、支持 NAT / conntrack 的 Linux 内核和服务器出网能力。安装器不会修改服务器原有 Node.js，而是安装校验过的私有 Node.js 24 运行时。Ubuntu 20.04 使用系统自带的 nftables 即可，无需升级系统或安装 Docker。
 
-### 使用本地发布包
+### 在源码仓库中安装
 
-在 Linux / WSL 或 GitHub Actions 中构建发布包：
-
-```bash
-npm ci
-bash scripts/package.sh
-```
-
-将 `dist/fastproxy-v0.1.2.tar.gz` 和 `scripts/install.sh` 上传到服务器，然后执行：
+服务器已经下载源码时，直接执行：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.2.tar.gz
+cd ~/fastproxy
+git pull --ff-only
+sudo bash scripts/install.sh
 sudo fastproxy
 ```
+
+首次下载源码可以使用：
+
+```bash
+git clone https://github.com/bunnya33/fastproxy.git ~/fastproxy
+cd ~/fastproxy
+sudo bash scripts/install.sh
+sudo fastproxy
+```
+
+安装器自动准备 Node.js 24，运行 `npm ci`、编译 Vue 前端和 TypeScript 后端，再安装后端生产依赖、systemd 服务与数字菜单。源码会复制到临时目录编译，不带入仓库的 node_modules、演示数据或 .env；编译成功后才替换服务。第一次安装需要下载依赖，请等待编译完成。
 
 安装器会显示首次生成的随机管理密码。默认后台绑定 `127.0.0.1:8080`；在你的电脑建立 SSH 隧道：
 
@@ -65,23 +71,23 @@ ssh -N -L 8080:127.0.0.1:8080 用户@服务器
 随后在电脑浏览器打开 `http://127.0.0.1:8080`。如需直接监听公网：
 
 ```bash
-sudo bash install.sh --package ./fastproxy-v0.1.2.tar.gz --listen 0.0.0.0:8080
+sudo bash scripts/install.sh --listen 0.0.0.0:8080
 ```
 
 公网管理后台请配置 HTTPS 反向代理或限制管理端口来源。安装器不会自动开放云安全组或修改 UFW / firewalld 的转发策略。
 
 ### curl 安装（推荐）
 
-源码位于 [bunnya33/fastproxy](https://github.com/bunnya33/fastproxy)，安装器从 [GitHub Releases](https://github.com/bunnya33/fastproxy/releases) 下载构建好的网页、服务程序与校验文件。
+源码位于 [bunnya33/fastproxy](https://github.com/bunnya33/fastproxy)。通过 curl 执行时，安装器自动用 Git 拉取 main 源码并在服务器编译，不使用 FastProxy 预编译压缩包。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bunnya33/fastproxy/main/scripts/install.sh \
   | sudo bash
 ```
 
-也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.2`。重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。
+也可先下载脚本后执行。指定版本使用 `sudo bash install.sh --version v0.1.3`，或使用 `--version latest` 拉取最新发布标签。指定其他本地源码目录使用 `--source /path/to/fastproxy`；它不能与 `--repo` / `--version` 同时使用。
 
-如果旧安装器报“版本格式应为 v0.1.0 或 latest”，是系统信息覆盖发布版本的脚本问题，已在 v0.1.2 修复，Ubuntu 20.04 无需升级系统。在源码目录执行 `git pull --ff-only` 后重新运行 `sudo bash scripts/install.sh`，或使用上方命令获取最新安装器。
+重新执行安装器可更新程序，保留管理地址、密码、规则和审计记录。仓库安装更新前先 `git pull --ff-only`；curl 安装重新运行命令即可。v0.1.3 起移除了 `--package` 和应用打包步骤，旧安装器的发布包检查错误通过更新安装器解决。
 
 ## 数字菜单
 
@@ -162,4 +168,6 @@ sudo unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 \
 
 如需验证真实 systemd 单元的权限限制、启动、重启恢复和停止清理，在已构建的 Linux 项目目录运行 `sudo bash scripts/test-systemd.sh`。脚本使用独立网络命名空间和临时单元，结束后清理，不安装正式服务。
 
-安装器回归测试：`sudo bash scripts/test-install.sh`。使用 Ubuntu 20.04 / Debian 12 系统信息和离线下载、服务替身，执行真实安装脚本的默认与指定版本安装、更新、参数校验和校验失败路径。挂载与网络命名空间隔离生产目录和主机网络；测试不实际安装依赖或启动服务。CI 同时在 Ubuntu 20.04 用户环境中执行此测试。
+安装器回归测试：`sudo bash scripts/test-install.sh`。使用 Ubuntu 20.04 / Debian 12 系统信息和离线下载、构建及服务替身，覆盖本地源码、curl 入口、版本选择、配置保留、编译失败保留原服务和 Node 校验失败。
+
+真实源码安装测试：`sudo env FASTPROXY_TEST_NODE="$(command -v node)" bash scripts/test-install.sh --real`，需要 Linux Node.js 24、nftables、jq、curl 和 npm registry 出网。测试预先准备独立 npm 缓存，然后在挂载和网络命名空间内真实安装依赖、编译 Vue / TypeScript、启动安装后的 Node 服务、通过菜单查看规则，并验证更新后恢复和停止清理；systemd 控制操作由测试替身执行。测试结束清理临时目录，不安装正式服务或修改主机网络。CI 同时在 Ubuntu 20.04 用户环境中执行这两套安装测试。

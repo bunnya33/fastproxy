@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Download and install a prebuilt Node.js/TypeScript + Vue release. No Docker.
+# Build and install Node.js/TypeScript + Vue directly from source. No Docker.
 set -euo pipefail
 
 REPO=${FASTPROXY_REPO:-bunnya33/fastproxy}
-RELEASE_VERSION=latest
-PACKAGE=''
+RELEASE_VERSION=main
+SOURCE=''
+REMOTE_REQUESTED=false
 LISTEN=${FASTPROXY_LISTEN:-127.0.0.1:8080}
 ADMIN_USER=${FASTPROXY_ADMIN_USER:-admin}
 ADMIN_PASSWORD=${FASTPROXY_ADMIN_PASSWORD:-}
@@ -14,10 +15,12 @@ CHECK_ONLY=false
 
 usage() {
   cat <<'HELP'
-FastProxy 安装 / 更新（Debian 12+、Ubuntu 20.04+，systemd）
-  bash install.sh --repo OWNER/REPO [--version v0.1.2]
-  bash install.sh --package /path/fastproxy-v0.1.2.tar.gz
+FastProxy 源码编译安装 / 更新（Debian 12+、Ubuntu 20.04+，systemd）
+  bash scripts/install.sh                编译脚本所在的源码仓库
+  bash install.sh --source /path/fastproxy
+  bash install.sh --repo OWNER/REPO [--version v0.1.3]
 选项：
+  --version main|latest|v0.1.3  拉取 main、最新发布标签或指定标签
   --listen 127.0.0.1:8080   管理后台监听地址（首次安装）
   --user admin             管理用户名（首次安装）
   --check                  只检查环境，不安装
@@ -28,9 +31,15 @@ HELP
 die() { echo "错误：$*" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo|--version|--package|--listen|--user)
+    --repo|--version|--source|--listen|--user)
       [[ $# -ge 2 ]] || die "$1 缺少参数"
-      case "$1" in --repo) REPO=$2 ;; --version) RELEASE_VERSION=$2 ;; --package) PACKAGE=$2 ;; --listen) LISTEN=$2 ;; --user) ADMIN_USER=$2 ;; esac
+      case "$1" in
+        --repo) REPO=$2; REMOTE_REQUESTED=true ;;
+        --version) RELEASE_VERSION=$2; REMOTE_REQUESTED=true ;;
+        --source) SOURCE=$2 ;;
+        --listen) LISTEN=$2 ;;
+        --user) ADMIN_USER=$2 ;;
+      esac
       shift 2 ;;
     --check) CHECK_ONLY=true; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -54,12 +63,27 @@ case $(uname -m) in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die '仅
 [[ "$LISTEN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$ ]] || die '监听地址格式应为 IPv4:端口'
 PORT=${LISTEN##*:}
 [[ $((10#$PORT)) -ge 1 && $((10#$PORT)) -le 65535 ]] || die '管理端口应为 1–65535'
-if [[ -z "$PACKAGE" ]]; then
-  [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die '请指定 --repo OWNER/REPO，或 --package 本地发布包'
-  [[ "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 v0.1.2 或 latest'
-else
-  [[ -f "$PACKAGE" ]] || die '本地发布包不存在'
-  PACKAGE=$(realpath "$PACKAGE")
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die '仓库格式应为 OWNER/REPO'
+[[ "$RELEASE_VERSION" == main || "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 main、latest 或 v0.1.3'
+[[ -z "$SOURCE" || "$REMOTE_REQUESTED" == false ]] || die '--source 不能与 --repo / --version 同时使用'
+# A repository invocation builds its checkout. A script downloaded or piped
+# through curl fetches source from Git; it does not depend on release archives.
+if [[ -z "$SOURCE" && "$REMOTE_REQUESTED" == false && -f ${BASH_SOURCE[0]:-} ]]; then
+  SCRIPT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  if [[ -f "$SCRIPT_ROOT/package.json" && -f "$SCRIPT_ROOT/package-lock.json" ]]; then SOURCE=$SCRIPT_ROOT; fi
+fi
+validate_source() {
+  local entry
+  for entry in package.json package-lock.json apps/server/package.json apps/server/tsconfig.json apps/server/src \
+    apps/web/package.json apps/web/tsconfig.json apps/web/vite.config.ts apps/web/index.html apps/web/src apps/web/public \
+    scripts/start scripts/fastproxy scripts/fastproxy.service README.md LICENSE; do
+    [[ -e "$SOURCE/$entry" ]] || die "源码不完整，缺少 $entry"
+  done
+}
+if [[ -n "$SOURCE" ]]; then
+  [[ -d "$SOURCE" ]] || die '源码目录不存在'
+  SOURCE=$(realpath "$SOURCE")
+  validate_source
 fi
 if [[ "$CHECK_ONLY" == true ]]; then
   echo "环境检查通过：${PRETTY_NAME:-Linux}，$ARCH，systemd；安装位置 $INSTALL_ROOT"
@@ -68,27 +92,29 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl jq nftables iproute2 xz-utils openssl libstdc++6
+apt-get install -y -qq ca-certificates curl git jq nftables iproute2 xz-utils openssl libstdc++6
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-if [[ -z "$PACKAGE" ]]; then
+if [[ -z "$SOURCE" ]]; then
   if [[ "$RELEASE_VERSION" == latest ]]; then
     RELEASE_VERSION=$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name')
     [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '未找到正式发布版本，请先创建 GitHub Release'
   fi
-  FILE="fastproxy-$RELEASE_VERSION.tar.gz"
-  BASE="https://github.com/$REPO/releases/download/$RELEASE_VERSION"
-  curl -fsSL --proto '=https' --tlsv1.2 "$BASE/$FILE" -o "$TMP/$FILE"
-  curl -fsSL --proto '=https' --tlsv1.2 "$BASE/SHA256SUMS" -o "$TMP/SHA256SUMS"
-  (cd "$TMP" && awk -v file="$FILE" '$2 == file || $2 == "*" file {print}' SHA256SUMS > selected.sha256 && [[ -s selected.sha256 ]] && sha256sum -c selected.sha256) || die '发布包校验失败'
-  PACKAGE="$TMP/$FILE"
+  echo "拉取源码：$REPO ($RELEASE_VERSION)"
+  git clone --depth 1 --branch "$RELEASE_VERSION" "https://github.com/$REPO.git" "$TMP/source"
+  SOURCE="$TMP/source"
+  validate_source
 fi
-# Reject traversal and symlinks before extracting as root.
-tar -tzf "$PACKAGE" | awk '/(^\/|(^|\/)\.\.($|\/))/ {bad=1} END {exit bad}' || die '发布包包含非法路径'
-tar -tvzf "$PACKAGE" | awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {bad=1} END {exit bad}' || die '发布包包含链接或特殊文件'
-mkdir -p "$TMP/app"
-tar --no-same-owner -xzf "$PACKAGE" -C "$TMP/app"
-[[ -f "$TMP/app/apps/server/dist/main.js" && -f "$TMP/app/apps/server/public/index.html" && -f "$TMP/app/start" && -f "$TMP/app/scripts/fastproxy.service" && -d "$TMP/app/node_modules/fastify" ]] || die '发布包不完整'
+echo "编译源码：$SOURCE"
+# Copy only build inputs. Keep checkout dependencies, demo data and credentials
+# out of the installation; npm must resolve native dependencies on this server.
+mkdir -p "$TMP/app/apps/server" "$TMP/app/apps/web" "$TMP/app/scripts"
+cp "$SOURCE/package.json" "$SOURCE/package-lock.json" "$SOURCE/README.md" "$SOURCE/LICENSE" "$TMP/app/"
+cp -a "$SOURCE/apps/server/src" "$SOURCE/apps/server/package.json" "$SOURCE/apps/server/tsconfig.json" "$TMP/app/apps/server/"
+cp -a "$SOURCE/apps/web/src" "$SOURCE/apps/web/public" "$SOURCE/apps/web/package.json" "$SOURCE/apps/web/tsconfig.json" \
+  "$SOURCE/apps/web/vite.config.ts" "$SOURCE/apps/web/index.html" "$TMP/app/apps/web/"
+cp "$SOURCE/scripts/start" "$SOURCE/scripts/fastproxy" "$SOURCE/scripts/fastproxy.service" "$TMP/app/scripts/"
+cp "$SOURCE/scripts/start" "$TMP/app/start"
 
 # Use a private, verified runtime; do not alter the server's existing Node.js.
 if [[ -z "$NODE_VERSION" ]]; then
@@ -107,6 +133,14 @@ else
   tar -xJf "$TMP/$NODE_FILE" -C "$TMP/app/runtime" --strip-components=1
 fi
 "$TMP/app/runtime/bin/node" --version
+(
+  cd "$TMP/app"
+  export PATH="$TMP/app/runtime/bin:$PATH"
+  npm ci --include=dev --no-audit --no-fund
+  npm run build
+  npm ci --omit=dev --workspace @fastproxy/server --include-workspace-root=false --ignore-scripts --no-audit --no-fund
+)
+[[ -f "$TMP/app/apps/server/dist/main.js" && -f "$TMP/app/apps/server/public/index.html" && -d "$TMP/app/node_modules/fastify" ]] || die '编译产物不完整'
 
 FIRST_INSTALL=false
 mkdir -p /etc/fastproxy /var/lib/fastproxy
@@ -140,7 +174,7 @@ fi
 echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/90-fastproxy.conf
 sysctl -p /etc/sysctl.d/90-fastproxy.conf >/dev/null
 
-# Stop the old service only after the new package and runtime are ready.
+# Stop the old service only after the source build and runtime are ready.
 [[ ! -e "$INSTALL_ROOT.previous" ]] || die "已有 $INSTALL_ROOT.previous，请先处理上次更新的备份"
 [[ ! -e "$INSTALL_ROOT.failed" ]] || die "已有 $INSTALL_ROOT.failed，请先处理上次失败的版本"
 WAS_ACTIVE=false

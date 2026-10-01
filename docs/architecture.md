@@ -12,5 +12,6 @@
 - NAT 规则影响新连接。修改、停用、删除或正常停止服务后，既有 conntrack 会话可能继续到超时；正常停止会移除 FastProxy 表，异常退出后表可能保留，重启将重新应用磁盘配置。
 - 流量计数来自内核双向 FORWARD 计数器，每次规则发布或服务重启会重置。不将内核安装成功误报为目标服务可用。
 - systemd 开机启动并负责异常重启；规则文件位于 `/var/lib/fastproxy/state.json`，操作记录为 `audit.jsonl`，服务日志在 journal。
+- 安装直接编译源码：仓库内使用当前目录的代码，curl 入口拉取 main 或指定标签；临时目录完成依赖安装、前后端构建和后端生产依赖安装后再替换服务。程序使用 `/opt/fastproxy/runtime` 中的私有 Node.js 24，更新保留 `/etc/fastproxy` 和 `/var/lib/fastproxy`。
 
 后台面向运维人员，推荐通过 SSH 隧道或 HTTPS 反向代理访问。默认管理地址只绑定 `127.0.0.1:8080`。
