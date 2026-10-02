@@ -47,7 +47,7 @@ test('HTTP authentication, CSRF, CRUD, errors and root-only API share one state'
   assert.equal((await app.inject({ method: 'PUT', url: `/api/rules/${added.id}`, headers, payload: { revision: 2, rule: { ...added, target_port: 21000 } } })).statusCode, 503);
   runtime.fail = false;
   const paused = await local.inject({ method: 'POST', url: '/api/forwarding', payload: { revision: 2, forwarding: false } }); assert.equal(paused.statusCode, 200);
-  assert.doesNotMatch(runtime.applied.at(-1)!, /dnat to/);
+  assert.doesNotMatch(runtime.applied.at(-1)!, /frontend fp_/);
   assert.equal((await app.inject({ method: 'DELETE', url: `/api/rules/${added.id}`, headers, payload: { revision: 3 } })).statusCode, 200);
   const remaining = (await app.inject({ url: '/api/status', headers })).json(); assert.equal(remaining.state.rules.length, 0);
   await app.inject({ method: 'POST', url: '/api/logout', headers, payload: {} });

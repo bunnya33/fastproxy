@@ -4,12 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { isPort } from './model.js';
 
 export interface Config {
-  mode: 'nftables' | 'demo';
+  mode: 'haproxy' | 'demo';
   host: string;
   port: number;
   dataDir: string;
   socketPath: string;
-  nftBinary: string;
+  haproxyBinary: string;
+  runtimeDir: string;
   adminUser: string;
   adminPassword: string;
   cookieSecure: boolean;
@@ -18,9 +19,9 @@ export interface Config {
 }
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const mode = env.FASTPROXY_MODE ?? 'nftables';
-  if (mode !== 'nftables' && mode !== 'demo') throw new Error('FASTPROXY_MODE 必须是 nftables 或 demo');
-  if (mode === 'nftables' && process.platform !== 'linux') throw new Error('nftables 需要 Linux；本地预览请使用 npm run dev');
+  const mode = env.FASTPROXY_MODE ?? 'haproxy';
+  if (mode !== 'haproxy' && mode !== 'demo') throw new Error('FASTPROXY_MODE 必须是 haproxy 或 demo；旧安装请重新运行安装器迁移');
+  if (mode === 'haproxy' && process.platform !== 'linux') throw new Error('HAProxy 部署需要 Linux；本地预览请使用 npm run dev');
   const listen = env.FASTPROXY_LISTEN ?? '127.0.0.1:8080';
   const split = listen.lastIndexOf(':');
   const host = listen.slice(0, split);
@@ -36,7 +37,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     mode, host, port, dataDir,
     socketPath: env.FASTPROXY_SOCKET ?? '/run/fastproxy/control.sock',
-    nftBinary: env.FASTPROXY_NFT_BINARY ?? '/usr/sbin/nft',
+    haproxyBinary: env.FASTPROXY_HAPROXY_BINARY ?? '/usr/sbin/haproxy',
+    runtimeDir: env.FASTPROXY_RUNTIME_DIR ?? path.dirname(env.FASTPROXY_SOCKET ?? '/run/fastproxy/control.sock'),
     adminUser, adminPassword, cookieSecure: env.FASTPROXY_COOKIE_SECURE === 'true',
     protectedPorts: [...new Set([...ports, port])],
     publicDir: path.resolve(env.FASTPROXY_PUBLIC_DIR ?? fileURLToPath(new URL('../public', import.meta.url))),

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Auth } from './auth.js';
 import { readConfig } from './config.js';
 import { buildApp } from './http.js';
-import { DemoRuntime, NFTRuntime } from './runtime.js';
+import { DemoRuntime, HAProxyRuntime } from './runtime.js';
 import { Service } from './service.js';
 import { Store } from './store.js';
 import { acquireLock } from './lock.js';
@@ -14,8 +14,15 @@ export async function start(): Promise<void> {
   config.publicDir = process.env.FASTPROXY_PUBLIC_DIR ?? fileURLToPath(new URL('../public/', import.meta.url));
   const auth = await Auth.create(config.adminUser, config.adminPassword);
   const unlock = await acquireLock(config.dataDir);
-  const runtime = config.mode === 'demo' ? new DemoRuntime() : new NFTRuntime(config.nftBinary);
-  let service: Service;
+  let service: Service | undefined;
+  let failed = false;
+  const runtime = config.mode === 'demo' ? new DemoRuntime() : new HAProxyRuntime(config.haproxyBinary, config.runtimeDir, error => {
+    if (failed) return;
+    failed = true;
+    console.error('HAProxy worker failed:', error.message);
+    // Queue cleanup after any in-flight change so disk rollback finishes first.
+    void (service?.close() ?? runtime.clear()).catch(() => undefined).finally(() => process.exit(1));
+  });
   try { service = await Service.create(new Store(config.dataDir), runtime, config.protectedPorts); }
   catch (error) { await unlock(); throw error; }
   let web: Awaited<ReturnType<typeof buildApp>>;
@@ -23,7 +30,7 @@ export async function start(): Promise<void> {
   catch (error) { await service.close().catch(() => undefined); await unlock(); throw error; }
   let control: Awaited<ReturnType<typeof buildApp>> | undefined;
   try {
-    if (config.mode === 'nftables') {
+    if (config.mode === 'haproxy') {
       const dir = path.dirname(config.socketPath);
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       await fs.chmod(dir, 0o700);
@@ -45,7 +52,7 @@ export async function start(): Promise<void> {
     const timer = setTimeout(() => process.exit(1), 20_000).unref();
     try {
       await Promise.all([web.close(), control?.close()]);
-      await service.close();
+      await service!.close();
       if (control) await fs.rm(config.socketPath, { force: true });
       await unlock();
       clearTimeout(timer); process.exit(0);

@@ -14,7 +14,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci && npm run typecheck && npm run build && npm test
-      - run: sudo apt-get update && sudo apt-get install -y nftables iproute2 jq
+      - run: sudo apt-get update && sudo apt-get install -y haproxy iproute2 jq
       - run: sudo bash scripts/test-install.sh
       - run: sudo env FASTPROXY_TEST_NODE="$(command -v node)" bash scripts/test-install.sh --real
       - run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"

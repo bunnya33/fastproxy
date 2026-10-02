@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Isolated source installations. --real compiles the actual Vue/TypeScript
-# checkout and starts the installed server with real Node.js and nftables.
+# checkout and starts the installed server with real Node.js and HAProxy.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo'; exit 1; }
@@ -29,7 +29,7 @@ if [[ ${1:-} == --namespace ]]; then
   if [[ "$REAL_INSTALL" == true ]]; then ip link set lo up; fi
   INSTALL_ARGS=()
   case "$SCENARIO" in
-    local|remote) ;;
+    local|remote|migration_failure) ;;
     explicit) INSTALL_ARGS=(--version v1.2.2) ;;
     latest) INSTALL_ARGS=(--version latest) ;;
     invalid)
@@ -62,7 +62,7 @@ if [[ ${1:-} == --namespace ]]; then
   if ! run_install > "$CASE_DIR/output" 2>&1; then cat "$CASE_DIR/output"; cat "$CASE_DIR/server.log" 2>/dev/null || true; exit 1; fi
   case "$SCENARIO" in
     local) [[ ! -s "$CASE_DIR/git.log" ]] ;;
-    remote) awk '/--branch main / {found=1} END {exit !found}' "$CASE_DIR/git.log" ;;
+    remote|migration_failure) awk '/--branch main / {found=1} END {exit !found}' "$CASE_DIR/git.log" ;;
     explicit) awk '/--branch v1.2.2 / {found=1} END {exit !found}' "$CASE_DIR/git.log" ;;
     latest) awk '/--branch v1.2.3 / {found=1} END {exit !found}' "$CASE_DIR/git.log" ;;
   esac
@@ -77,31 +77,59 @@ if [[ ${1:-} == --namespace ]]; then
     "$FIXTURES/real-curl" -fsS http://127.0.0.1:8080/ > "$CASE_DIR/web.html"
     awk '/FastProxy/ {found=1} END {exit !found}' "$CASE_DIR/web.html"
     "$FIXTURES/real-curl" -fsS --unix-socket /run/fastproxy/control.sock -X POST -H 'Content-Type: application/json' \
-      --data-binary '{"revision":0,"rule":{"id":"","name":"source install","protocol":"both","listen_ip":"0.0.0.0","listen_port":18000,"target_ip":"10.250.2.2","target_port":19000,"enabled":true}}' \
+      --data-binary '{"revision":0,"rule":{"id":"","name":"source install","protocol":"tcp","listen_ip":"0.0.0.0","listen_port":18000,"target_ip":"10.250.2.2","target_port":19000,"enabled":true}}' \
       http://localhost/api/rules > "$CASE_DIR/rule.json"
-    nft list table ip fastproxy | awk '/dnat to 10.250.2.2:19000/ {count++} END {exit count!=2}'
+    ss -ltn | awk '/:18000 / {found=1} END {exit !found}'
     /usr/local/bin/fastproxy list > "$CASE_DIR/menu.txt"
     awk '/source install/ {found=1} END {exit !found}' "$CASE_DIR/menu.txt"
   else
-    printf '%s\n' '{"schema_version":1,"revision":7,"forwarding":true,"rules":[],"updated_at":null}' > /var/lib/fastproxy/state.json
+    printf '%s\n' '{"schema_version":2,"revision":7,"forwarding":true,"rules":[],"updated_at":null}' > /var/lib/fastproxy/state.json
     awk '/^run build$/ {found=1} END {exit !found}' "$CASE_DIR/npm.log"
     awk '/--omit=dev/ {found=1} END {exit !found}' "$CASE_DIR/npm.log"
+  fi
+  if [[ "$REAL_INSTALL" == true || "$SCENARIO" == migration_failure ]]; then
+    # Simulate an installed nftables version. The actual new backend must
+    # migrate this state on update while retaining passwords and endpoints.
+    sed 's/FASTPROXY_MODE=haproxy/FASTPROXY_MODE=nftables/; s/FASTPROXY_HAPROXY_BINARY=.*/FASTPROXY_NFT_BINARY=\/usr\/sbin\/nft/' /etc/fastproxy/fastproxy.env > "$CASE_DIR/legacy.env"
+    cp "$CASE_DIR/legacy.env" /etc/fastproxy/fastproxy.env
+    jq '.schema_version=1 | .rules |= map(.protocol="both") | .rules += [{id:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",name:"legacy UDP",protocol:"udp",listen_ip:"0.0.0.0",listen_port:18003,target_ip:"10.250.2.2",target_port:19003,enabled:true}]' \
+      /var/lib/fastproxy/state.json > "$CASE_DIR/legacy-state.json"
+    cp "$CASE_DIR/legacy-state.json" /var/lib/fastproxy/state.json
+    printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-fastproxy.conf
+    touch "$CASE_DIR/legacy-table"
+    if [[ "$SCENARIO" == migration_failure ]]; then
+      export FAIL_START=true
+      if run_install > "$CASE_DIR/migration-output" 2>&1; then echo 'Failed migration was accepted'; exit 1; fi
+      cmp "$CASE_DIR/legacy.env" /etc/fastproxy/fastproxy.env
+      cmp "$CASE_DIR/legacy-state.json" /var/lib/fastproxy/state.json
+      [[ -d /opt/fastproxy.failed && -f "$CASE_DIR/active" ]]
+      echo "$OS: failed migration restores old program, engine config and rules: PASS"
+      exit 0
+    fi
   fi
   cp /var/lib/fastproxy/state.json "$CASE_DIR/original-state.json"
   export FASTPROXY_ADMIN_PASSWORD=different-regression-password
   if ! run_install --listen 0.0.0.0:9090 > "$CASE_DIR/update-output" 2>&1; then
     cat "$CASE_DIR/update-output"; cat "$CASE_DIR/server.log" 2>/dev/null || true; exit 1
   fi
-  cmp "$CASE_DIR/original.env" /etc/fastproxy/fastproxy.env
-  cmp "$CASE_DIR/original-state.json" /var/lib/fastproxy/state.json
+  if [[ "$REAL_INSTALL" == true ]]; then
+    diff <(sort "$CASE_DIR/original.env") <(sort /etc/fastproxy/fastproxy.env)
+    cmp "$CASE_DIR/legacy.env" /etc/fastproxy/fastproxy.env.nftables-backup
+    cmp <(jq -S . "$CASE_DIR/legacy-state.json") <(jq -S . /var/lib/fastproxy/state.nftables-backup.json)
+    jq -e '.schema_version == 2 and .revision == 2 and .rules[0].protocol == "tcp" and .rules[0].enabled and .rules[1].protocol == "udp" and (.rules[1].enabled | not)' /var/lib/fastproxy/state.json >/dev/null
+    [[ ! -f /etc/sysctl.d/90-fastproxy.conf && ! -f "$CASE_DIR/legacy-table" ]]
+  else
+    cmp "$CASE_DIR/original.env" /etc/fastproxy/fastproxy.env
+    cmp "$CASE_DIR/original-state.json" /var/lib/fastproxy/state.json
+  fi
   awk '/^stop fastproxy$/ {found=1} END {exit !found}' "$CASE_DIR/services.log"
   [[ ! -e /opt/fastproxy.previous ]]
   if [[ "$REAL_INSTALL" == true ]]; then
     /usr/local/bin/fastproxy list > "$CASE_DIR/menu.txt"
     awk '/source install/ {found=1} END {exit !found}' "$CASE_DIR/menu.txt"
-    nft list table ip fastproxy | awk '/dnat to 10.250.2.2:19000/ {count++} END {exit count!=2}'
+    ss -ltn | awk '/:18000 / {found=1} END {exit !found}'
     systemctl stop fastproxy
-    if nft list table ip fastproxy >/dev/null 2>&1; then echo 'Stopped service left its nftables table'; exit 1; fi
+    if ss -ltn | awk '/:18000 / {found=1} END {exit !found}'; then echo 'Stopped service left a TCP listener'; exit 1; fi
   else
     cp "$CASE_DIR/services.log" "$CASE_DIR/original-services.log"
     cp /opt/fastproxy/apps/server/dist/main.js "$CASE_DIR/original-main.js"
@@ -196,9 +224,15 @@ cp -a "$FIXTURES/source" "${!#}"
 STUB
 cat > "$FIXTURES/bin/sysctl" <<'STUB'
 #!/usr/bin/env bash
+echo 'HAProxy installer must not change sysctl' >&2
+exit 1
+STUB
+cat > "$FIXTURES/bin/nft" <<'STUB'
+#!/usr/bin/env bash
 set -euo pipefail
-[[ $1 == -p && $2 == /etc/sysctl.d/90-fastproxy.conf ]]
-if [[ "$REAL_INSTALL" == true ]]; then exec "$FIXTURES/real-sysctl" "$@"; fi
+[[ $* == 'list table ip fastproxy' || $* == 'delete table ip fastproxy' ]]
+[[ -f "$CASE_DIR/legacy-table" ]]
+if [[ $1 == delete ]]; then rm "$CASE_DIR/legacy-table"; fi
 STUB
 cat > "$FIXTURES/bin/systemctl" <<'STUB'
 #!/usr/bin/env bash
@@ -207,6 +241,7 @@ echo "$*" >> "$CASE_DIR/services.log"
 case "$1" in
   is-active) [[ -f "$CASE_DIR/active" ]] ;;
   start)
+    if [[ ${FAIL_START:-false} == true && ! -f "$CASE_DIR/failure-consumed" ]]; then touch "$CASE_DIR/failure-consumed"; exit 1; fi
     [[ -f /opt/fastproxy/apps/server/dist/main.js && -f /etc/fastproxy/fastproxy.env ]]
     if [[ "$REAL_INSTALL" == true ]]; then
       set -a
@@ -263,9 +298,8 @@ chmod +x "$FIXTURES/bin/"*
 # Resolve tools whose symlinks pass through /etc/alternatives before hiding /etc.
 ln -s "$(readlink -f "$(command -v awk)")" "$FIXTURES/bin/awk"
 ln -s "$(readlink -f "$(command -v curl)")" "$FIXTURES/real-curl"
-ln -s "$(readlink -f "$(command -v sysctl)")" "$FIXTURES/real-sysctl"
 for OS in ubuntu debian; do
-  if [[ "$REAL_INSTALL" == true ]]; then SCENARIOS=(local); else SCENARIOS=(local remote explicit latest invalid checksum); fi
+  if [[ "$REAL_INSTALL" == true ]]; then SCENARIOS=(local); else SCENARIOS=(local remote explicit latest invalid checksum migration_failure); fi
   for SCENARIO in "${SCENARIOS[@]}"; do
     unshare --mount --net --fork --propagation private bash "$0" --namespace "$FIXTURES" "$OS" "$SCENARIO"
   done

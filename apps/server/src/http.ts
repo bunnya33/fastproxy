@@ -4,7 +4,7 @@ import staticFiles from '@fastify/static';
 import fs from 'node:fs/promises';
 import { Auth } from './auth.js';
 import type { Config } from './config.js';
-import { ApiError, object, parseRule, renderNFT, revision, token } from './model.js';
+import { ApiError, object, parseRule, renderHAProxy, revision, token } from './model.js';
 import type { Service } from './service.js';
 
 export async function buildApp(service: Service, config: Config, auth: Auth, local = false, logging = true): Promise<FastifyInstance> {
@@ -68,7 +68,7 @@ export async function buildApp(service: Service, config: Config, auth: Auth, loc
   }
   const actor = (id?: string) => local ? 'root-console' : auth.session(id)?.user ?? 'unknown';
   app.get('/api/status', () => service.status());
-  app.get('/api/config', () => ({ config: renderNFT(service.snapshot()), revision: service.snapshot().revision }));
+  app.get('/api/config', () => ({ config: renderHAProxy(service.snapshot()), revision: service.snapshot().revision }));
   app.post('/api/rules', async request => {
     const body = object(request.body, ['revision', 'rule']);
     const rule = parseRule(body.rule, token());

@@ -1,8 +1,8 @@
 {
   "name": "fastproxy",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
-  "description": "Manage Linux nftables TCP/UDP port forwarding from a web panel and terminal menu",
+  "description": "Manage HAProxy TCP port forwarding from a web panel and terminal menu",
   "engines": { "node": ">=22.12.0" },
   "workspaces": ["apps/server", "apps/web"],
   "scripts": {

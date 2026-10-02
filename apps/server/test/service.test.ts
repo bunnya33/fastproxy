@@ -3,18 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initialState, parseRule, token, validateState, type Rule } from '../src/model.js';
+import { initialState, parseRule, token, validateState } from '../src/model.js';
 import { Store } from '../src/store.js';
 import { Service } from '../src/service.js';
 import { parseCounters } from '../src/runtime.js';
 import { FakeRuntime, rule } from './fixtures.js';
 import { acquireLock } from '../src/lock.js';
 
-test('conflicting listeners, reserved ports and nft injection are rejected', () => {
+test('conflicting listeners, reserved ports, UDP and config injection are rejected', () => {
   const state = initialState(); state.rules = [rule(), rule({ listen_ip: '10.0.0.1' })];
   assert.throws(() => validateState(state, [22, 8080]), /冲突/);
-  state.rules[1]!.protocol = 'udp'; validateState(state, [22, 8080]);
-  state.rules[1]!.protocol = 'both'; assert.throws(() => validateState(state, [22, 8080]), /冲突/);
+  state.rules[1]!.protocol = 'udp'; assert.throws(() => validateState(state, [22, 8080]), /仅支持 TCP/);
   state.rules[1]!.enabled = false; validateState(state, [22, 8080]);
   state.rules[0]!.listen_port = 22; assert.throws(() => validateState(state, [22, 8080]), /SSH/);
   assert.throws(() => parseRule({ ...rule(), target_ip: '10.0.0.1; flush ruleset' }, token()), /目标/);
@@ -23,7 +22,7 @@ test('conflicting listeners, reserved ports and nft injection are rejected', () 
   assert.throws(() => parseRule({ ...rule(), target_ip: '127.0.0.1' }, token()), /目标/);
 });
 
-test('failed kernel transaction preserves disk, memory and prior configuration', async t => {
+test('failed HAProxy reload preserves disk, memory and prior configuration', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fp-test-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const runtime = new FakeRuntime(), store = new Store(dir);
   const service = await Service.create(store, runtime, [22, 8080]);
@@ -56,11 +55,28 @@ test('invalid disk data is preserved instead of silently resetting rules', async
   assert.equal(await fs.readFile(filename, 'utf8'), '{broken');
 });
 
-test('kernel counters aggregate both directions and protocols without double-counting NAT', () => {
+test('HAProxy counters count frontend bytes without counting backend copies', () => {
   const id = token();
-  const counter = (direction: string, bytes: number) => ({ rule: { comment: `fp:${id}:${direction}:tcp`, expr: [{ counter: { packets: 1, bytes } }] } });
-  const parsed = parseCounters(JSON.stringify({ nftables: [counter('in', 100), counter('out', 200), counter('nat', 999)] }));
-  assert.deepEqual(parsed[id], { bytes: 300, packets: 2 });
+  const parsed = parseCounters(`# pxname,svname,bin,bout,stot,\nfp_${id},FRONTEND,100,200,2,\ntarget_${id},BACKEND,100,200,2,`);
+  assert.deepEqual(parsed[id], { bytes: 300, connections: 2 });
+});
+
+test('legacy rules migrate with a backup: TCP preserved, both becomes TCP, UDP archived', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fp-migrate-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const legacy = { ...initialState(), schema_version: 1, revision: 5, rules: [rule(), { ...rule({ listen_port: 18001 }), protocol: 'both' }, rule({ listen_port: 18002, protocol: 'udp' })] };
+  const filename = path.join(dir, 'state.json'); await fs.writeFile(filename, JSON.stringify(legacy));
+  const runtime = new FakeRuntime();
+  const service = await Service.create(new Store(dir), runtime, [22]);
+  assert.equal(service.snapshot().schema_version, 2);
+  assert.equal(service.snapshot().revision, 6);
+  assert.deepEqual(service.snapshot().rules.map(r => [r.protocol, r.enabled]), [['tcp', true], ['tcp', true], ['udp', false]]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, 'state.nftables-backup.json'), 'utf8')), legacy);
+  assert.doesNotMatch(runtime.applied.at(-1)!, /18002/);
+  await assert.rejects(service.change(6, s => { s.rules[2]!.enabled = true; }), /仅支持 TCP/);
+  assert.equal(service.snapshot().revision, 6);
+  const restarted = await Service.create(new Store(dir), runtime, [22]);
+  assert.equal(restarted.snapshot().revision, 6);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, 'state.nftables-backup.json'), 'utf8')), legacy);
 });
 
 test('a second process is refused, and stale service locks can recover after a crash', async t => {

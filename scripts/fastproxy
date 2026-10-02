@@ -37,7 +37,7 @@ api() {
 status() {
   echo "systemd: $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
   if [[ -S "$SOCKET" ]]; then
-    api GET /api/status | jq -r '"引擎: \(.runtime.mode)  内核状态: \(if .runtime.healthy then "正常" else "异常" end)\n转发: \(if .state.forwarding then "开启" else "暂停" end)  规则数: \(.state.rules | length)  版本: r\(.state.revision)\n运行时长: \(.uptime_seconds) 秒\n\(.runtime.error // "")"'
+    api GET /api/status | jq -r '"引擎: \(.runtime.mode)  HAProxy 状态: \(if .runtime.healthy then "正常" else "异常" end)\n转发: \(if .state.forwarding then "开启" else "暂停" end)  规则数: \(.state.rules | length)  版本: r\(.state.revision)\n运行时长: \(.uptime_seconds) 秒\n\(.runtime.error // "")"'
   fi
 }
 
@@ -67,7 +67,8 @@ edit_rule() {
     id=$(jq -r '.id' <<< "$existing")
   fi
   name=$(prompt '规则名称' "$(jq -r '.name // "我的转发"' <<< "$existing")") || return
-  protocol=$(prompt '协议 tcp / udp / both' "$(jq -r '.protocol // "tcp"' <<< "$existing")") || return
+  protocol=tcp
+  echo '转发协议：TCP（HAProxy）'
   listen_ip=$(prompt '监听 IPv4（0.0.0.0 表示全部本机地址）' "$(jq -r '.listen_ip // "0.0.0.0"' <<< "$existing")") || return
   listen_port=$(prompt '本机监听端口' "$(jq -r '.listen_port // 8000' <<< "$existing")") || return
   target_ip=$(prompt '目标服务器 IPv4' "$(jq -r '.target_ip // ""' <<< "$existing")") || return
@@ -92,6 +93,7 @@ choose_rule() {
   [[ -n "$rule" ]] || { echo '规则不存在'; return; }
   id=$(jq -r '.id' <<< "$rule")
   revision=$(jq '.state.revision' <<< "$state")
+  if [[ "$action" != delete && $(jq -r ' .protocol' <<< "$rule") == udp ]]; then echo 'HAProxy 不支持 UDP，请修改为 TCP 或删除旧规则。'; return; fi
   if [[ "$action" == delete ]]; then
     read -r -p "删除 $(jq -r '.name' <<< "$rule")？输入 yes 确认: " confirm || return
     [[ "$confirm" == yes ]] || return

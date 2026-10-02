@@ -18,9 +18,9 @@ usage() {
 FastProxy 源码编译安装 / 更新（Debian 12+、Ubuntu 20.04+，systemd）
   bash scripts/install.sh                编译脚本所在的源码仓库
   bash install.sh --source /path/fastproxy
-  bash install.sh --repo OWNER/REPO [--version v0.1.3]
+  bash install.sh --repo OWNER/REPO [--version v0.2.0]
 选项：
-  --version main|latest|v0.1.3  拉取 main、最新发布标签或指定标签
+  --version main|latest|v0.2.0  拉取 main、最新发布标签或指定标签
   --listen 127.0.0.1:8080   管理后台监听地址（首次安装）
   --user admin             管理用户名（首次安装）
   --check                  只检查环境，不安装
@@ -64,7 +64,7 @@ case $(uname -m) in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die '仅
 PORT=${LISTEN##*:}
 [[ $((10#$PORT)) -ge 1 && $((10#$PORT)) -le 65535 ]] || die '管理端口应为 1–65535'
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die '仓库格式应为 OWNER/REPO'
-[[ "$RELEASE_VERSION" == main || "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 main、latest 或 v0.1.3'
+[[ "$RELEASE_VERSION" == main || "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die '版本格式应为 main、latest 或 v0.2.0'
 [[ -z "$SOURCE" || "$REMOTE_REQUESTED" == false ]] || die '--source 不能与 --repo / --version 同时使用'
 # A repository invocation builds its checkout. A script downloaded or piped
 # through curl fetches source from Git; it does not depend on release archives.
@@ -92,7 +92,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git jq nftables iproute2 xz-utils openssl libstdc++6
+apt-get install -y -qq ca-certificates curl git jq haproxy xz-utils openssl libstdc++6
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 if [[ -z "$SOURCE" ]]; then
@@ -159,7 +159,7 @@ if [[ ! -f /etc/fastproxy/fastproxy.env ]]; then
   ESCAPED=${ADMIN_PASSWORD//\\/\\\\}; ESCAPED=${ESCAPED//\"/\\\"}
   [[ "$ESCAPED" != *$'\n'* && "$ESCAPED" != *$'\r'* ]] || die '密码不能包含换行'
   cat > /etc/fastproxy/fastproxy.env <<ENV
-FASTPROXY_MODE=nftables
+FASTPROXY_MODE=haproxy
 FASTPROXY_LISTEN=$LISTEN
 FASTPROXY_ADMIN_USER=$ADMIN_USER
 FASTPROXY_ADMIN_PASSWORD="$ESCAPED"
@@ -167,18 +167,33 @@ FASTPROXY_COOKIE_SECURE=false
 FASTPROXY_PROTECTED_PORTS=$SSH_PORT
 FASTPROXY_DATA_DIR=/var/lib/fastproxy
 FASTPROXY_SOCKET=/run/fastproxy/control.sock
-FASTPROXY_NFT_BINARY=/usr/sbin/nft
+FASTPROXY_HAPROXY_BINARY=/usr/sbin/haproxy
 ENV
   chmod 600 /etc/fastproxy/fastproxy.env
 fi
-echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/90-fastproxy.conf
-sysctl -p /etc/sysctl.d/90-fastproxy.conf >/dev/null
-
 # Stop the old service only after the source build and runtime are ready.
 [[ ! -e "$INSTALL_ROOT.previous" ]] || die "已有 $INSTALL_ROOT.previous，请先处理上次更新的备份"
 [[ ! -e "$INSTALL_ROOT.failed" ]] || die "已有 $INSTALL_ROOT.failed，请先处理上次失败的版本"
 WAS_ACTIVE=false
 if systemctl is-active --quiet fastproxy; then WAS_ACTIVE=true; systemctl stop fastproxy; fi
+MIGRATE_NFT=false
+if awk '/^FASTPROXY_MODE="?nftables"?$/ {found=1} END {exit !found}' /etc/fastproxy/fastproxy.env; then
+  MIGRATE_NFT=true
+  cp -p /etc/fastproxy/fastproxy.env "$TMP/original.env"
+  if [[ ! -f /etc/fastproxy/fastproxy.env.nftables-backup ]]; then cp -p /etc/fastproxy/fastproxy.env /etc/fastproxy/fastproxy.env.nftables-backup; fi
+  if [[ -f /var/lib/fastproxy/state.json ]]; then cp -p /var/lib/fastproxy/state.json "$TMP/original-state.json"; fi
+  # The old service removes its table on stop. Clean up only its dedicated
+  # table if a previous crash left it behind; never change another firewall.
+  if command -v nft >/dev/null && nft list table ip fastproxy >/dev/null 2>&1; then
+    if ! nft delete table ip fastproxy; then
+      [[ "$WAS_ACTIVE" == false ]] || systemctl start fastproxy
+      die '旧 FastProxy 表清理失败，已停止迁移，请检查旧服务日志'
+    fi
+  fi
+  awk '!/^FASTPROXY_MODE=/ && !/^FASTPROXY_NFT_BINARY=/ && !/^FASTPROXY_HAPROXY_BINARY=/' "$TMP/original.env" > "$TMP/haproxy.env"
+  printf 'FASTPROXY_MODE=haproxy\nFASTPROXY_HAPROXY_BINARY=/usr/sbin/haproxy\n' >> "$TMP/haproxy.env"
+  install -m 600 "$TMP/haproxy.env" /etc/fastproxy/fastproxy.env
+fi
 if [[ -d "$INSTALL_ROOT" ]]; then mv "$INSTALL_ROOT" "$INSTALL_ROOT.previous"; fi
 mv "$TMP/app" "$INSTALL_ROOT"
 chmod 755 "$INSTALL_ROOT/start" "$INSTALL_ROOT/scripts/fastproxy"
@@ -192,6 +207,10 @@ rollback() {
   if [[ -d "$INSTALL_ROOT.previous" ]]; then
     mv "$INSTALL_ROOT" "$INSTALL_ROOT.failed"
     mv "$INSTALL_ROOT.previous" "$INSTALL_ROOT"
+    if [[ "$MIGRATE_NFT" == true ]]; then
+      install -m 600 "$TMP/original.env" /etc/fastproxy/fastproxy.env
+      if [[ -f "$TMP/original-state.json" ]]; then install -m 600 "$TMP/original-state.json" /var/lib/fastproxy/state.json; fi
+    fi
     install -m 755 "$INSTALL_ROOT/scripts/fastproxy" /usr/local/bin/fastproxy
     install -m 644 "$INSTALL_ROOT/scripts/fastproxy.service" /etc/systemd/system/fastproxy.service
     systemctl daemon-reload
@@ -207,6 +226,10 @@ for ((i=0; i<15; i++)); do
 done
 if [[ "$READY" != true ]]; then rollback; die '服务未就绪，已尝试回退；运行 sudo fastproxy logs 检查'; fi
 if [[ -d "$INSTALL_ROOT.previous" ]]; then rm -rf "$INSTALL_ROOT.previous"; fi
+if [[ "$MIGRATE_NFT" == true ]]; then
+  if [[ -f /etc/sysctl.d/90-fastproxy.conf ]] && cmp -s /etc/sysctl.d/90-fastproxy.conf <(printf 'net.ipv4.ip_forward=1\n'); then rm /etc/sysctl.d/90-fastproxy.conf; fi
+  echo '已迁移到 HAProxy；原配置和规则已备份。TCP 保留，both 改为 TCP，纯 UDP 规则保留为停用状态。'
+fi
 echo
 echo 'FastProxy 已安装，数字菜单：sudo fastproxy'
 if [[ "$FIRST_INSTALL" == true ]]; then
@@ -215,4 +238,4 @@ if [[ "$FIRST_INSTALL" == true ]]; then
     printf '通过 SSH 隧道访问：ssh -N -L %s:127.0.0.1:%s 用户@服务器\n浏览器打开：http://127.0.0.1:%s\n' "$PORT" "$PORT" "$PORT"
   else echo '远程访问管理后台时，请配置 HTTPS 或限制管理端口来源。'; fi
 else echo '原密码、监听地址与转发规则已保留。'; fi
-echo '如使用 UFW / firewalld，还需放行 FORWARD 流量和云安全组中的转发端口。'
+echo 'HAProxy 仅转发 TCP。请放行云安全组及本机防火墙 INPUT 中的监听端口。'

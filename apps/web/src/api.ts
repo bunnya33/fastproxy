@@ -1,7 +1,7 @@
 export interface Rule {
   id: string;
   name: string;
-  protocol: 'tcp' | 'udp' | 'both';
+  protocol: 'tcp' | 'udp';
   listen_ip: string;
   listen_port: number;
   target_ip: string;
@@ -10,7 +10,7 @@ export interface Rule {
 }
 export interface Status {
   state: { schema_version: number; revision: number; forwarding: boolean; rules: Rule[]; updated_at: string | null };
-  runtime: { mode: 'nftables' | 'demo'; healthy: boolean; ip_forward: boolean; error?: string; counters: Record<string, { packets: number; bytes: number }> };
+  runtime: { mode: 'haproxy' | 'demo'; healthy: boolean; version?: string; pid?: number; draining_workers?: number; error?: string; counters: Record<string, { connections: number; bytes: number }> };
   uptime_seconds: number;
   protected_ports: number[];
 }

@@ -1,5 +1,5 @@
 import { networkInterfaces } from 'node:os';
-import { ApiError, renderNFT, validateState, type State } from './model.js';
+import { ApiError, migrateState, renderHAProxy, validateState, type State } from './model.js';
 import type { Store } from './store.js';
 import type { Runtime, RuntimeStatus } from './runtime.js';
 
@@ -17,9 +17,16 @@ export class Service {
   private constructor(private state: State, private store: Store, private runtime: Runtime, private protectedPorts: number[]) {}
 
   static async create(store: Store, runtime: Runtime, protectedPorts: number[]): Promise<Service> {
-    const state = await store.load();
+    const loaded = await store.load();
+    const state = migrateState(loaded);
     validateState(state, protectedPorts);
-    await runtime.apply(renderNFT(state));
+    if (state !== loaded) await store.backupLegacy(loaded);
+    await runtime.apply(renderHAProxy(state));
+    if (state !== loaded) {
+      try { await store.save(state); }
+      catch (error) { await runtime.clear(); throw error; }
+      console.log('旧规则已备份到 state.nftables-backup.json；both 已迁移为 TCP，UDP 已停用。');
+    }
     return new Service(state, store, runtime, protectedPorts);
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -43,9 +50,9 @@ export class Service {
       candidate.revision++;
       candidate.updated_at = new Date().toISOString();
       // Durable intent first. On crash, startup reapplies this intent. No reader
-      // can observe it before the atomic kernel transaction succeeds.
+      // can observe it before the new HAProxy worker is ready.
       await this.store.save(candidate);
-      try { await this.runtime.apply(renderNFT(candidate)); }
+      try { await this.runtime.apply(renderHAProxy(candidate)); }
       catch (error) {
         try { await this.store.save(this.state); }
         catch (restoreError) {
@@ -63,7 +70,7 @@ export class Service {
     return this.serial(async () => {
       // Also repair disk after a previous persistence rollback failure.
       await this.store.save(this.state);
-      await this.runtime.apply(renderNFT(this.state));
+      await this.runtime.apply(renderHAProxy(this.state));
       this.lastError = '';
     });
   }

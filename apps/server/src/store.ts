@@ -36,6 +36,10 @@ export class Store {
     }
   }
   async save(state: State): Promise<void> { await atomicWrite(path.join(this.dir, 'state.json'), JSON.stringify(state, null, 2) + '\n'); }
+  async backupLegacy(state: State): Promise<void> {
+    try { await fs.writeFile(path.join(this.dir, 'state.nftables-backup.json'), JSON.stringify(state, null, 2) + '\n', { mode: 0o600, flag: 'wx' }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+  }
   async audit(actor: string, action: string): Promise<void> {
     await fs.appendFile(path.join(this.dir, 'audit.jsonl'), JSON.stringify({ time: new Date().toISOString(), actor, action }) + '\n', { mode: 0o600 });
   }
