@@ -18,6 +18,15 @@ cleanup() {
   rm -rf "$QA_DIR"
 }
 trap cleanup EXIT
+# ProtectHome must remain enabled even when the checkout or Node is in /home.
+# Stage the built application and executable outside the protected directories.
+mkdir -p "$QA_DIR/app/apps/server"
+install -m 755 "$NODE_BIN" "$QA_DIR/node"
+NODE_BIN="$QA_DIR/node"
+cp -a "$ROOT/apps/server/dist" "$ROOT/apps/server/package.json" "$QA_DIR/app/apps/server/"
+cp -a "$ROOT/node_modules" "$QA_DIR/app/"
+if [[ -d "$ROOT/apps/server/node_modules" ]]; then cp -a "$ROOT/apps/server/node_modules" "$QA_DIR/app/apps/server/"; fi
+APP_ROOT="$QA_DIR/app"
 unshare --net "$NODE_BIN" -e 'setInterval(() => {}, 60000)' &
 HOLDER=$!
 for ((i=0; i<20; i++)); do
@@ -38,8 +47,8 @@ FASTPROXY_HAPROXY_BINARY=/usr/sbin/haproxy
 ENV
 sed \
   -e "s|EnvironmentFile=.*|EnvironmentFile=$QA_DIR/config.env|" \
-  -e "s|ExecStart=.*|ExecStart=$NODE_BIN $ROOT/apps/server/dist/main.js|" \
-  -e "s|WorkingDirectory=.*|WorkingDirectory=$ROOT|" \
+  -e "s|ExecStart=.*|ExecStart=$NODE_BIN $APP_ROOT/apps/server/dist/main.js|" \
+  -e "s|WorkingDirectory=.*|WorkingDirectory=$APP_ROOT|" \
   -e "s|RuntimeDirectory=fastproxy$|RuntimeDirectory=$UNIT|" \
   -e '/^StateDirectory/d' \
   -e "s|ReadWritePaths=.*|ReadWritePaths=$QA_DIR /run/$UNIT|" \

@@ -173,7 +173,7 @@ sudo unshare --mount --net --fork env FASTPROXY_INTEGRATION=1 \
 
 真实测试在独立网络命名空间内建立请求端、转发端和目标端，在内核转发关闭时验证 TCP 二进制数据及回包、监听 / 目标端口修改、已有连接跨重载继续工作、停用 / 恢复、配置失败和端口冲突回退、服务恢复与停止清理。不会改变主机网络。
 
-如需验证真实 systemd 单元的权限限制、启动、重启恢复和停止清理，在已构建的 Linux 项目目录运行 `sudo bash scripts/test-systemd.sh`。脚本使用独立网络命名空间和临时单元，结束后清理，不安装正式服务。
+如需验证真实 systemd 单元的权限限制、启动、HAProxy 异常退出自动恢复、重启恢复和停止清理，在已构建的 Linux 项目目录运行 `sudo bash scripts/test-systemd.sh`。脚本使用独立网络命名空间和临时单元，结束后清理，不安装正式服务。
 
 安装器回归测试：`sudo bash scripts/test-install.sh`。使用 Ubuntu 20.04 / Debian 12 系统信息和离线下载、构建及服务替身，覆盖本地源码、curl 入口、版本选择、配置保留、编译失败保留原服务和 Node 校验失败。
 
